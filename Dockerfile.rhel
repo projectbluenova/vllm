@@ -7,10 +7,10 @@
 
 #################### BASE BUILD IMAGE ####################
 # prepare basic build environment
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS dev
+FROM nvidia/cuda:12.4.1-cudnn8-devel-ubi9 AS dev
 
-RUN apt-get update -y \
-    && apt-get install -y python3-pip git
+RUN yum update -y \
+    && yum install -y python3-pip python3-devel git
 
 # Workaround for https://github.com/openai/triton/issues/2507 and
 # https://github.com/pytorch/pytorch/issues/107960 -- hopefully
@@ -48,9 +48,6 @@ COPY requirements-build.txt requirements-build.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements-build.txt
 
-# install compiler cache to speed up compilation leveraging local or remote caching
-RUN apt-get update -y && apt-get install -y ccache
-
 # files and directories related to build wheels
 COPY csrc csrc
 COPY setup.py setup.py
@@ -70,21 +67,19 @@ ENV NVCC_THREADS=$nvcc_threads
 # make sure punica kernels are built (for LoRA)
 ENV VLLM_INSTALL_PUNICA_KERNELS=1
 
-ENV CCACHE_DIR=/root/.cache/ccache
-RUN --mount=type=cache,target=/root/.cache/ccache \
-    --mount=type=cache,target=/root/.cache/pip \
+RUN --mount=type=cache,target=/root/.cache/pip \
     python3 setup.py bdist_wheel --dist-dir=dist
 
 # check the size of the wheel, we cannot upload wheels larger than 100MB
-COPY .buildkite/check-wheel-size.py check-wheel-size.py
-RUN python3 check-wheel-size.py dist
+# COPY .buildkite/check-wheel-size.py check-wheel-size.py
+# RUN python3 check-wheel-size.py dist
 
 # the `vllm_nccl` package must be installed from source distribution
 # pip is too smart to store a wheel in the cache, and other CI jobs
 # will directly use the wheel from the cache, which is not what we want.
 # we need to remove it manually
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip cache remove vllm_nccl*
+# RUN --mount=type=cache,target=/root/.cache/pip \
+#    pip cache remove vllm_nccl*
 #################### EXTENSION Build IMAGE ####################
 
 #################### FLASH_ATTENTION Build IMAGE ####################
@@ -106,11 +101,11 @@ RUN pip --verbose wheel flash-attn==${FLASH_ATTN_VERSION} \
 
 #################### vLLM installation IMAGE ####################
 # image with vLLM installed
-FROM nvidia/cuda:12.4.1-base-ubuntu22.04 AS vllm-base
+FROM nvidia/cuda:12.4.1-cudnn8-devel-ubi9 AS vllm-base
 WORKDIR /vllm-workspace
 
-RUN apt-get update -y \
-    && apt-get install -y python3-pip git vim
+RUN yum update -y \
+    && yum install -y python3-pip git vim
 
 # Workaround for https://github.com/openai/triton/issues/2507 and
 # https://github.com/pytorch/pytorch/issues/107960 -- hopefully
@@ -128,36 +123,19 @@ RUN --mount=type=bind,from=flash-attn-builder,src=/usr/src/flash-attention-v2,ta
     pip install /usr/src/flash-attention-v2/*.whl --no-cache-dir
 #################### vLLM installation IMAGE ####################
 
-
-#################### TEST IMAGE ####################
-# image to run unit testing suite
-# note that this uses vllm installed by `pip`
-FROM vllm-base AS test
-
-ADD . /vllm-workspace/
-
-# install development dependencies (for testing)
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements-dev.txt
-
-# doc requires source code
-# we hide them inside `test_docs/` , so that this source code
-# will not be imported by other tests
-RUN mkdir test_docs
-RUN mv docs test_docs/
-RUN mv vllm test_docs/
-
-#################### TEST IMAGE ####################
-
-#################### OPENAI API SERVER ####################
+#################### vLLM API SERVER ####################
 # openai api server alternative
-FROM vllm-base AS vllm-openai
+FROM vllm-base AS vllm-server
 
-# install additional dependencies for openai api server
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install accelerate hf_transfer modelscope
+ENV VLLM_NO_USAGE_STATS 1
+ENV DO_NOT_TRACK 1
+
+RUN mkdir -p /root/.config/vllm && touch /root/.config/vllm/do_not_track
 
 ENV VLLM_USAGE_SOURCE production-docker-image
 
-ENTRYPOINT ["python3", "-m", "vllm.entrypoints.openai.api_server"]
-#################### OPENAI API SERVER ####################
+COPY neural-chat-7B-v3-3-GPTQ-gptq-4bit-128g-actorder_True /neural-chat-7B-v3-3-GPTQ-gptq-4bit-128g-actorder_True
+
+ENTRYPOINT ["python3", "-m", "vllm.entrypoints.api_server","--model","/neural-chat-7B-v3-3-GPTQ-gptq-4bit-32g-actorder_True","--quantization","gptq"]
+
+#################### vLLM API SERVER ####################
