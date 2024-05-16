@@ -2,8 +2,8 @@
 -r requirements-common.txt
 
 # Dependencies for NVIDIA GPUs
-ray >= 2.9
-nvidia-ml-py # for pynvml package
+ray==2.20.0
+nvidia-ml-py==12.550.52 # for pynvml package
 vllm-nccl-cu12>=2.18,<2.19  # for downloading nccl library
 torch == 2.3.0
 xformers == 0.0.26.post1  # Requires PyTorch 2.3.0
